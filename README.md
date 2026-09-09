@@ -1,12 +1,12 @@
 # ButtonMaster
 
-A [MacroQuest](https://www.macroquest.org/) Lua addon for EverQuest: fully configurable, ImGui-based hotbars ("Buttons") for firing commands, spells, abilities, disciplines, AAs, items, and custom Lua — built with multiboxing in mind (shared button Sets across characters, `/bc`-style broadcast commands, per-character display settings).
+A MacroQuest Lua addon for EverQuest: fully configurable, ImGui-based hotbars ("Buttons") for firing commands, spells, abilities, disciplines, AAs, items, and custom Lua — built with multiboxing in mind (shared button Sets across characters, `/bc`-style broadcast commands, per-character display settings).
 
 > This is a fork/continuation of [DerpleDude/buttonmaster](https://github.com/DerpleDude/buttonmaster). See "Origin" below.
 
 ## Requirements
 
-- [MacroQuest](https://www.macroquest.org/) with Lua scripting support
+- MacroQuest with Lua scripting support
 - EverQuest
 
 ## Installation
