@@ -1,6 +1,7 @@
 local mq                              = require('mq')
 local btnUtils                        = require('lib.buttonUtils')
 local BMButtonHandlers                = require('bmButtonHandlers')
+local BMHotkeys                       = require('bmHotkeys')
 local Zep                             = require('Zep')
 local picker                          = require('lib.IconPicker').new()
 
@@ -108,7 +109,7 @@ function BMButtonEditor:RenderEditButtonPopup()
             end
         end
 
-        self:RenderButtonEditUI(self.tmpButton, true, true)
+        self:RenderButtonEditUI(self.tmpButton, true, true, ButtonKey)
 
         -- save button
         if ImGui.Button("Save") or (ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows) and (ImGui.IsKeyChordPressed(bit32.bor(ImGuiMod.Ctrl, ImGuiKey.S)))) then
@@ -148,6 +149,8 @@ function BMButtonEditor:SaveButton(ButtonKey)
             ButtonKey                                                                      -- add the button key for this button set index
         BMSettings:GetSettings().Buttons[ButtonKey] = btnUtils.shallowcopy(self.tmpButton) -- store the tmp button into the settings table
         BMSettings:GetSettings().Buttons[ButtonKey].Unassigned = nil                       -- clear the unassigned flag
+        BMSettings:GetSettings().Buttons[ButtonKey].Hotkey = nil                           -- Hotkey never lives on the shared button
+        BMSettings:SetButtonHotkey(ButtonKey, self.tmpButton.Hotkey)                       -- stored per-character instead
 
         BMSettings:SaveSettings(true)
         BMButtonEditor.textBuffer:ClearFlags(Zep.BufferFlags.Dirty)
@@ -159,6 +162,7 @@ end
 
 function BMButtonEditor:CloseEditPopup()
     picker:SetClosed()
+    BMHotkeys.CancelCapture(self.tmpButton)
     self.editButtonPopupOpen = false
     self.editButtonIndex = 0
     self.editButtonSet = ""
@@ -172,6 +176,11 @@ function BMButtonEditor:OpenEditPopup(Set, Index)
     self.selectedUpdateRate = 1
     local button = BMSettings:GetButtonBySetIndex(Set, Index)
     self.tmpButton = btnUtils.shallowcopy(button)
+    -- Hotkey lives per-character, not on the shared button (see SaveButton) -
+    -- seed the live-editing copy from THIS character's binding for this key.
+    local ButtonKey = BMSettings:GetButtonSectionKeyBySetIndex(Set, Index)
+    local existingHotkey = BMSettings:GetButtonHotkey(ButtonKey)
+    self.tmpButton.Hotkey = existingHotkey and btnUtils.shallowcopy(existingHotkey) or nil
     BMButtonEditor.textBuffer:SetText(button.Cmd or "")
 
     if not button.Unassigned and button.TimerType and button.TimerType:len() > 0 then
@@ -195,7 +204,66 @@ function BMButtonEditor:CreateButtonFromCursor(Set, Index)
     self:OpenEditPopup(Set, Index)
 end
 
-function BMButtonEditor:RenderButtonEditUI(renderButton, enableShare, enableEdit)
+---Renders the "Set Hotkey / Clear Hotkey" row plus capture prompt and any conflict/risk warnings.
+---@param renderButton table # BMButtonConfig currently being edited (usually self.tmpButton)
+---@param excludeButtonKey string? # this button's own key in BMSettings Buttons table, so it isn't flagged as its own conflict
+function BMButtonEditor:RenderHotkeyUI(renderButton, excludeButtonKey)
+    ImGui.Text("Hotkey:")
+    ImGui.SameLine()
+
+    local formatted = BMHotkeys.FormatHotkey(renderButton.Hotkey)
+    ImGui.TextColored(ImVec4(1, 1, 0, 1), formatted:len() > 0 and formatted or "<Unassigned>")
+
+    local isListeningForThis = BMHotkeys.Listening and BMHotkeys.ListenTargetButton == renderButton
+
+    ImGui.SameLine()
+    if isListeningForThis then
+        -- Capture doesn't finalize the instant a key registers - see
+        -- BMHotkeys.CaptureSettleFrames. Show what's been seen so far.
+        local preview = BMHotkeys.CaptureProgress()
+        local promptLabel = preview and string.format("Confirming: %s ... (Esc to cancel)", preview) or
+            "Press a key... (Esc to cancel)"
+        if ImGui.Button(promptLabel) then
+            BMHotkeys.CancelCapture()
+        end
+        if BMHotkeys.PollCapture() then
+            self.editButtonUIChanged = true
+        end
+    else
+        if ImGui.Button("Set Hotkey") then
+            BMHotkeys.BeginCapture(renderButton)
+        end
+    end
+
+    if renderButton.Hotkey then
+        ImGui.SameLine()
+        if ImGui.Button("Clear Hotkey") then
+            renderButton.Hotkey = nil
+            self.editButtonUIChanged = true
+        end
+    end
+
+    btnUtils.Tooltip(
+        "Hotkeys are captured globally, even while EverQuest has focus - not just while this window is hovered.\nThey're per-character: this binding only fires on THIS character, even if this button is shared with your other characters.\nThey're automatically suppressed while you're typing in EQ's chat box, but NOT while typing in other text fields (mail, bazaar search, etc) or while moving. Prefer Ctrl/Alt/Shift combinations for anything that isn't a dedicated function key.")
+
+    if renderButton.Hotkey then
+        if BMHotkeys.IsRisky(renderButton.Hotkey) then
+            ImGui.TextColored(ImVec4(1, 0.4, 0.2, 1),
+                string.format("Warning: '%s' has no modifier and is commonly used for movement or other typing (chat is exempted, other text fields aren't) - it will fire this button *in addition to* its normal effect.",
+                    formatted))
+        end
+
+        local conflictButtonKey = BMHotkeys.FindConflict(renderButton.Hotkey, BMSettings:GetCharHotkeys(), excludeButtonKey)
+        if conflictButtonKey then
+            local conflictButton = BMSettings:GetSettings().Buttons[conflictButtonKey]
+            ImGui.TextColored(ImVec4(1, 0.3, 0.3, 1),
+                string.format("Warning: also assigned to '%s' (on this character) - both will fire.",
+                    conflictButton and BMButtonHandlers.ResolveButtonLabel(conflictButton, true) or conflictButtonKey))
+        end
+    end
+end
+
+function BMButtonEditor:RenderButtonEditUI(renderButton, enableShare, enableEdit, excludeButtonKey)
     -- Share Buttton
     if enableShare then
         if ImGui.Button(Icons.MD_SHARE) then
@@ -279,6 +347,9 @@ function BMButtonEditor:RenderButtonEditUI(renderButton, enableShare, enableEdit
         renderButton.UpdateRate = BMSettings.Constants.UpdateRates[self.selectedUpdateRate].Value
         self.editButtonUIChanged = self.editButtonUIChanged or textChanged
     end
+
+    ImGui.Separator()
+    self:RenderHotkeyUI(renderButton, excludeButtonKey)
 
     ImGui.Separator()
     self:RenderTimerPanel(renderButton)

@@ -2,6 +2,7 @@ local mq                            = require('mq')
 local Set                           = require('mq.Set')
 local btnUtils                      = require('lib.buttonUtils')
 local BMButtonHandlers              = require('bmButtonHandlers')
+local BMHotkeys                     = require('bmHotkeys')
 local themes                        = require('extras.themes')
 local BMTab                         = require('bmTab')
 
@@ -490,6 +491,7 @@ function BMHotbarClass:RenderTabContextMenu()
                                     end
                                 end
                                 BMSettings:GetSettings().Buttons[item.buttonData.id] = nil
+                                BMSettings:ClearHotkeyEverywhere(item.buttonData.id)
                                 BMSettings:SaveSettings(true)
                                 break
                             end
@@ -643,6 +645,11 @@ function BMHotbarClass:RenderTabContextMenu()
                     .ShowSearch
                 BMSettings:SaveSettings(true)
             end
+            if ImGui.MenuItem((BMSettings:GetCharConfig().HotkeysEnabled == false and "Enable" or "Disable") .. " Hotkeys") then
+                BMSettings:GetCharConfig().HotkeysEnabled = BMSettings:GetCharConfig().HotkeysEnabled == false
+                BMSettings:SaveSettings(true)
+            end
+            btnUtils.Tooltip("Hotkeys are assigned per-button from the Edit Button window's 'Set Hotkey' button.\nThis turns firing them on/off for this character.")
             local fps_scale = {
                 {
                     label = "Instant",
@@ -734,6 +741,11 @@ function BMHotbarClass:RenderTabContextMenu()
             if ImGui.MenuItem((btnUtils.enableDebug and "Disable" or "Enable") .. " Debug") then
                 btnUtils.enableDebug = not btnUtils.enableDebug
             end
+            if ImGui.MenuItem((BMHotkeys.EnableWindowLookup and "Disable" or "Enable") .. " Chat-Window Lookup (Hotkeys)") then
+                BMHotkeys.EnableWindowLookup = not BMHotkeys.EnableWindowLookup
+            end
+            btnUtils.Tooltip(
+                "Turn this OFF to test whether the chat-window name lookup is false-positiving\nand blocking hotkeys outside of chat. The Enter/Escape-based suppression\nstill works fine without it - this is only the secondary, unverified check.")
             if ImGui.MenuItem("Remove All Duped Buttons") then
                 local duplicatekeys = Set.new({})
                 for buttonKey, buttonData in pairs(BMSettings:GetSettings().Buttons or {}) do
@@ -765,6 +777,7 @@ function BMHotbarClass:RenderTabContextMenu()
                         if BMSettings:GetSettings().Buttons[key] then
                             btnUtils.Output("   \ay-> Unused - Removing!")
                             BMSettings:GetSettings().Buttons[key] = nil
+                            BMSettings:ClearHotkeyEverywhere(key)
                         else
                             btnUtils.Output("   \ay-> Unused - Previosuly Removed!")
                         end
@@ -878,6 +891,7 @@ function BMHotbarClass:RenderContextMenu(Set, Index, buttonID)
                     end
                 end
                 BMSettings:GetSettings().Buttons[buttonID] = nil
+                BMSettings:ClearHotkeyEverywhere(buttonID)
                 BMSettings:SaveSettings(true)
             end
 
@@ -925,7 +939,7 @@ function BMHotbarClass:RenderButtons(Set, searchText)
             end
             ImGui.PushID(buttonID)
             clicked = BMButtonHandlers.Render(button, btnSize, showLabel, (BMSettings:GetCharacterWindow(self.id).Font or 10) / 10,
-                BMSettings:GetCharacterWindow(self.id).AdvTooltips)
+                BMSettings:GetCharacterWindow(self.id).AdvTooltips, btnKey)
             ImGui.PopID()
             -- TODO Move this to button config class and out of the UI thread.
             if clicked then
@@ -935,35 +949,41 @@ function BMHotbarClass:RenderButtons(Set, searchText)
                     BMButtonHandlers.Exec(button)
                 end
             else
-                -- setup drag and drop
-                if ImGui.BeginDragDropSource() then
-                    self.currentDnDData = { Set = Set, Index = ButtonIndex, }
-                    ImGui.SetDragDropPayload("BTN", self.id)
-                    ImGui.Button(button.Label, btnSize, btnSize)
-                    ImGui.EndDragDropSource()
-                end
-                if ImGui.BeginDragDropTarget() then
-                    local payload = ImGui.AcceptDragDropPayload("BTN")
-
-                    if payload ~= nil then
-                        ---@diagnostic disable-next-line: undefined-field
-                        local dndData = BMHotbars[payload.Data].currentDnDData
-                        local success = dndData ~= nil
-                        if success then
-                            local to_set = dndData.Set
-                            local to_num = dndData.Index
-                            btnUtils.Output("Dropping button from set '" ..
-                                tostring(to_set) .. "' index " .. tostring(to_num) .. " to set '" .. tostring(Set) .. "' index " .. tostring(ButtonIndex))
-
-                            -- swap the keys in the button set
-                            BMSettings:GetSettings().Sets[to_set][to_num], BMSettings:GetSettings().Sets[Set][ButtonIndex] =
-                                BMSettings:GetSettings().Sets[Set][ButtonIndex], BMSettings:GetSettings().Sets[to_set][to_num]
-                            BMSettings:SaveSettings(true)
-                        else
-                            btnUtils.Output("\arError: Failed to decode dropped button payload :: %s!\ax", payload.Data or "nil")
-                        end
+                -- Drag-and-drop is gated on the window's Locked flag (Display
+                -- Settings), and on BMButtonHandlers.IsInteractionSafe so a
+                -- click that switches focus between characters can't be
+                -- misread as a long-press-and-drag.
+                local isLocked = BMSettings:GetCharacterWindow(self.id).Locked
+                if not isLocked and BMButtonHandlers.IsInteractionSafe() then
+                    if ImGui.BeginDragDropSource() then
+                        self.currentDnDData = { Set = Set, Index = ButtonIndex, }
+                        ImGui.SetDragDropPayload("BTN", self.id)
+                        ImGui.Button(button.Label, btnSize, btnSize)
+                        ImGui.EndDragDropSource()
                     end
-                    ImGui.EndDragDropTarget()
+                    if ImGui.BeginDragDropTarget() then
+                        local payload = ImGui.AcceptDragDropPayload("BTN")
+
+                        if payload ~= nil then
+                            ---@diagnostic disable-next-line: undefined-field
+                            local dndData = BMHotbars[payload.Data].currentDnDData
+                            local success = dndData ~= nil
+                            if success then
+                                local to_set = dndData.Set
+                                local to_num = dndData.Index
+                                btnUtils.Output("Dropping button from set '" ..
+                                    tostring(to_set) .. "' index " .. tostring(to_num) .. " to set '" .. tostring(Set) .. "' index " .. tostring(ButtonIndex))
+
+                                -- swap the keys in the button set
+                                BMSettings:GetSettings().Sets[to_set][to_num], BMSettings:GetSettings().Sets[Set][ButtonIndex] =
+                                    BMSettings:GetSettings().Sets[Set][ButtonIndex], BMSettings:GetSettings().Sets[to_set][to_num]
+                                BMSettings:SaveSettings(true)
+                            else
+                                btnUtils.Output("\arError: Failed to decode dropped button payload :: %s!\ax", payload.Data or "nil")
+                            end
+                        end
+                        ImGui.EndDragDropTarget()
+                    end
                 end
 
                 self:RenderContextMenu(Set, ButtonIndex, buttonID)

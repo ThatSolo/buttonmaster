@@ -1,5 +1,6 @@
 local mq                 = require('mq')
 local btnUtils           = require('lib.buttonUtils')
+local BMHotkeys          = require('bmHotkeys')
 
 -- Icon Rendering
 local animItems          = mq.FindTextureAnimation("A_DragItem")
@@ -11,6 +12,41 @@ BMButtonHandlers.__index = BMButtonHandlers
 
 function BMButtonHandlers.GetTimeMS()
     return mq.gettime() / 1000
+end
+
+-- A click that switches window focus between characters can be seen by this
+-- client's ImGui as a mouse-down with no matching mouse-up, which Dear
+-- ImGui's drag-and-drop then misreads as a long-press on whatever button it
+-- landed on. Foreground state alone isn't enough to filter this out, since
+-- that stray mouse-down can be the very thing still "down" on the first
+-- frame this client regains foreground - so require a short settle period
+-- of stable foreground before trusting click-and-hold interaction again.
+-- See BMHotbarClass:RenderButtons.
+local INTERACTION_SETTLE_FRAMES = 20 -- roughly a third of a second at 60fps
+local wasForeground = false
+local foregroundStableFrames = 0
+
+---Call once per render frame, unconditionally (see init.lua's ButtonGUI) -
+---has to run every frame regardless of what else is going on or it'll miss
+---a focus transition and get out of sync.
+function BMButtonHandlers.UpdateFocusTracking()
+    local ok, isForeground = pcall(function() return mq.TLO.EverQuest.Foreground() end)
+    if not ok then isForeground = true end -- fail open rather than permanently locking out interaction
+
+    if isForeground and wasForeground then
+        foregroundStableFrames = foregroundStableFrames + 1
+    else
+        foregroundStableFrames = 0
+    end
+    wasForeground = isForeground
+end
+
+---False right as this client's window regains foreground (or while it's in
+---the background) - true once it's been stably foregrounded for a short
+---settle window. Gate click-and-hold interaction (drag-and-drop) on this.
+---@return boolean
+function BMButtonHandlers.IsInteractionSafe()
+    return foregroundStableFrames >= INTERACTION_SETTLE_FRAMES
 end
 
 ---@param Button table # BMButtonConfig
@@ -193,7 +229,7 @@ end
 ---@param Button table # BMButtonConfig
 ---@param label string
 ---@param subText string?
-function BMButtonHandlers.RenderButtonTooltip(Button, label, subText)
+function BMButtonHandlers.RenderButtonTooltip(Button, label, subText, Hotkey)
     -- hover tooltip
     if Button.Unassigned == nil and ImGui.IsItemHovered() then
         local tooltipText = label
@@ -205,6 +241,10 @@ function BMButtonHandlers.RenderButtonTooltip(Button, label, subText)
                 tooltipText = tooltipText .. "\n\n" .. btnUtils.FormatTime(math.ceil(countDown))
             end
 
+            if Hotkey then
+                tooltipText = tooltipText .. "\nHotkey: " .. BMHotkeys.FormatHotkey(Hotkey)
+            end
+
             ImGui.BeginTooltip()
             ImGui.Text(tooltipText)
             if subText then
@@ -214,6 +254,29 @@ function BMButtonHandlers.RenderButtonTooltip(Button, label, subText)
             ImGui.EndTooltip()
         end
     end
+end
+
+---@param Button table # BMButtonConfig
+---@param cursorScreenPos ImVec2 # cursor position on screen
+---@param size number # button size
+---@param Hotkey table? # this character's Hotkey for this button, if any (see BMSettings:GetButtonHotkey)
+function BMButtonHandlers.RenderButtonHotkeyBadge(Button, cursorScreenPos, size, Hotkey)
+    if not Hotkey or not Hotkey.Key then return end
+
+    local ok, keyName = pcall(ImGui.GetKeyName, Hotkey.Key)
+    if not ok or not keyName or keyName:len() == 0 then return end
+
+    local draw_list = ImGui.GetWindowDrawList()
+    ImGui.SetWindowFontScale(0.7)
+    local textW, textH = ImGui.CalcTextSize(keyName)
+    ImGui.SetWindowFontScale(1)
+
+    local pos = ImVec2(cursorScreenPos.x + size - textW - 2, cursorScreenPos.y + 1)
+    draw_list:AddRectFilled(pos, ImVec2(pos.x + textW + 2, pos.y + textH), IM_COL32(0, 0, 0, 140))
+
+    ImGui.SetWindowFontScale(0.7)
+    draw_list:AddText(pos, IM_COL32(255, 255, 0, 255), keyName)
+    ImGui.SetWindowFontScale(1)
 end
 
 ---@param Button table # BMButtonConfig
@@ -276,12 +339,14 @@ end
 ---@param renderLabel boolean # render the label on top or not
 ---@param fontScale number # Font scale for text
 ---@param advTooltips boolean # enable advanced tooltips6
+---@param ButtonKey string? # this button's key in BMSettings Buttons, so its per-character Hotkey (if any) can be looked up and shown
 ---@return boolean # clicked
-function BMButtonHandlers.Render(Button, size, renderLabel, fontScale, advTooltips)
+function BMButtonHandlers.Render(Button, size, renderLabel, fontScale, advTooltips, ButtonKey)
     local evaluatedLabel = BMButtonHandlers.ResolveButtonLabel(Button) or ""
     local clicked = false
     local startTimeMS = os.clock() * 1000
     local cursorScreenPos = ImGui.GetCursorScreenPosVec()
+    local hotkey = ButtonKey and BMSettings:GetButtonHotkey(ButtonKey) or nil
 
     BMButtonHandlers.RenderButtonIcon(Button, cursorScreenPos, size)
     clicked = ImGui.Selectable('', false, ImGuiSelectableFlags.DontClosePopups, size, size)
@@ -290,13 +355,14 @@ function BMButtonHandlers.Render(Button, size, renderLabel, fontScale, advToolti
     end
 
     BMButtonHandlers.RenderButtonCooldown(Button, cursorScreenPos, size)
+    BMButtonHandlers.RenderButtonHotkeyBadge(Button, cursorScreenPos, size, hotkey)
 
     -- label and tooltip
     ImGui.SetWindowFontScale(fontScale)
     if renderLabel then
         BMButtonHandlers.RenderButtonLabel(Button, cursorScreenPos, size, evaluatedLabel)
     end
-    BMButtonHandlers.RenderButtonTooltip(Button, evaluatedLabel, advTooltips and (Button.Cmd or nil) or nil)
+    BMButtonHandlers.RenderButtonTooltip(Button, evaluatedLabel, advTooltips and (Button.Cmd or nil) or nil, hotkey)
     ImGui.SetWindowFontScale(1)
 
 
@@ -346,6 +412,76 @@ function BMButtonHandlers.Exec(Button)
             btnUtils.EvaluateLua(Button.Cmd)
         end
         BMButtonHandlers.FireTimer(Button)
+    end
+end
+
+--- Scans every configured Button and Exec's any whose assigned Hotkey chord
+--- was just pressed this frame. Call once per render frame (see init.lua).
+--- Skipped while the button editor is capturing a new hotkey, while an ImGui
+--- text field has keyboard focus, while EQ's own chat input line is focused
+--- (typing a message/command), or while the current character has disabled
+--- hotkeys (Windows Display Settings -> Enable/Disable Hotkeys).
+function BMButtonHandlers.CheckHotkeys()
+    -- Must run every frame no matter what else below short-circuits, or the
+    -- Enter/Escape chat tracking it does can miss an edge and get out of sync.
+    BMHotkeys.UpdateChatTracking()
+
+    local settings = BMSettings and BMSettings:GetSettings()
+    if not settings or not settings.Buttons then return end
+
+    -- Hotkeys are per-character (BMSettings:GetCharHotkeys), not on the
+    -- shared Button, so this only fires buttons *this* character bound.
+    local charHotkeys = BMSettings:GetCharHotkeys()
+
+    -- Find whatever chord(s) were actually pressed THIS frame before
+    -- applying any gating below, so the debug logging only ever fires the
+    -- instant you press a bound key - not every single frame - and tells
+    -- you exactly which of the gates (if any) ate it. Enable this with the
+    -- hotbar's right-click menu -> Dev -> Enable Debug.
+    local pressed = {}
+    for buttonKey, hotkey in pairs(charHotkeys) do
+        local button = settings.Buttons[buttonKey]
+        if button then
+            local chord = BMHotkeys.BuildChord(hotkey)
+            if chord and ImGui.IsKeyChordPressed(chord) then
+                table.insert(pressed, { Button = button, Hotkey = hotkey })
+            end
+        end
+    end
+    if #pressed == 0 then return end
+
+    local function label()
+        return BMButtonHandlers.ResolveButtonLabel(pressed[1].Button, true)
+    end
+
+    if BMHotkeys.Listening then
+        btnUtils.Debug("CheckHotkeys: '%s' pressed but skipped - currently capturing a new hotkey assignment", label())
+        return
+    end
+
+    local charConfig = BMSettings:GetCharConfig()
+    if charConfig and charConfig.HotkeysEnabled == false then
+        btnUtils.Debug("CheckHotkeys: '%s' pressed but skipped - hotkeys are disabled for this character", label())
+        return
+    end
+
+    local io = ImGui.GetIO()
+    if io and io.WantTextInput then
+        btnUtils.Debug("CheckHotkeys: '%s' pressed but skipped - an ImGui text field has keyboard focus", label())
+        return
+    end
+
+    local chatActive, chatReason = BMHotkeys.IsChatInputActive()
+    if chatActive then
+        btnUtils.Debug("CheckHotkeys: '%s' pressed but skipped - chat input is presumed active (%s)", label(),
+            chatReason or "?")
+        return
+    end
+
+    for _, entry in ipairs(pressed) do
+        btnUtils.Debug("CheckHotkeys: firing '%s' (%s)", BMButtonHandlers.ResolveButtonLabel(entry.Button, true),
+            BMHotkeys.FormatHotkey(entry.Hotkey))
+        BMButtonHandlers.Exec(entry.Button)
     end
 end
 

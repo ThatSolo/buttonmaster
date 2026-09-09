@@ -83,6 +83,11 @@ local function BindBtnExec(set, index)
 end
 
 local function ButtonGUI()
+    -- Hotkeys fire even if the hotbar windows themselves are hidden/closed.
+    BMButtonHandlers.CheckHotkeys()
+    -- Must also run unconditionally - see BMButtonHandlers.IsInteractionSafe.
+    BMButtonHandlers.UpdateFocusTracking()
+
     if not openGUI then return end
     if not BMSettings:GetCharConfig() then return end
 

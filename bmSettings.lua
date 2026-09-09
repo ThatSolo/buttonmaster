@@ -117,6 +117,54 @@ function BMSettings:GetCharConfig()
     return self.settings.Characters[self.CharConfig]
 end
 
+--- Hotkeys are stored per-character, not on the shared Buttons table, so
+--- assigning one doesn't propagate to other characters sharing the button.
+---@return table # { [ButtonKey] = {Key=number, Ctrl=bool, Shift=bool, Alt=bool} }
+function BMSettings:GetCharHotkeys()
+    local charConfig = self:GetCharConfig()
+    charConfig.Hotkeys = charConfig.Hotkeys or {}
+    return charConfig.Hotkeys
+end
+
+---@param ButtonKey string
+---@return table? Hotkey
+function BMSettings:GetButtonHotkey(ButtonKey)
+    return self:GetCharHotkeys()[ButtonKey]
+end
+
+---@param ButtonKey string
+---@param Hotkey table? # nil clears it
+function BMSettings:SetButtonHotkey(ButtonKey, Hotkey)
+    self:GetCharHotkeys()[ButtonKey] = Hotkey
+end
+
+--- Removes any character's hotkey binding for this button key - call this
+--- when the button itself is being deleted outright (not just unassigned
+--- from one hotbar slot) so a stale binding doesn't linger for nobody.
+---@param ButtonKey string
+function BMSettings:ClearHotkeyEverywhere(ButtonKey)
+    for _, charData in pairs(self.settings.Characters or {}) do
+        if charData.Hotkeys then charData.Hotkeys[ButtonKey] = nil end
+    end
+end
+
+--- One-time migration for hotkeys assigned back when they lived on the
+--- shared Buttons table. Whichever character loads first claims each
+--- legacy hotkey into its own per-character map and strips it off the
+--- shared button; a no-op on every load after that. Called from LoadSettings.
+---@param charHotkeys table # the loading character's BMSettings:GetCharHotkeys() table
+---@param buttons table # settings.Buttons
+function BMSettings.MigrateLegacyButtonHotkeys(charHotkeys, buttons)
+    for buttonKey, button in pairs(buttons or {}) do
+        if button.Hotkey then
+            if charHotkeys[buttonKey] == nil then
+                charHotkeys[buttonKey] = button.Hotkey
+            end
+            button.Hotkey = nil
+        end
+    end
+end
+
 function BMSettings:GetButtonSectionKeyBySetIndex(Set, Index)
     -- somehow an invalid set exists. Just make it empty.
     if not self.settings.Sets[Set] then
@@ -421,6 +469,9 @@ function BMSettings:LoadSettings()
     self.settings.Characters[self.CharConfig] = self.settings.Characters[self.CharConfig] or {}
     self.settings.Characters[self.CharConfig].Windows = self.settings.Characters[self.CharConfig].Windows or
         { [1] = { Visible = true, Pos = { x = 10, y = 10, }, Sets = {}, Locked = false, }, }
+    self.settings.Characters[self.CharConfig].Hotkeys = self.settings.Characters[self.CharConfig].Hotkeys or {}
+
+    BMSettings.MigrateLegacyButtonHotkeys(self.settings.Characters[self.CharConfig].Hotkeys, self.settings.Buttons)
 
     self:InvalidateButtonCache()
     return true
