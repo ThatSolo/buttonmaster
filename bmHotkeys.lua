@@ -256,17 +256,48 @@ local function isKnownChatWindowFocused()
 end
 
 -- Self-tracked chat-input suppression that doesn't depend on knowing EQ's
--- internal window names. Every Enter (re)starts a grace window rather than
+-- internal window names. Enter (re)starts a grace window rather than
 -- toggling on/off, since a "closing" Enter isn't guaranteed to reach this
--- overlay - the window just expires on its own if no further Enter/Escape
--- is seen. Uses mq.gettime() rather than os.time() as the clock.
-BMHotkeys.ChatGraceSeconds = 2
+-- overlay; ordinary typing (or a held key) keeps extending it too, so the
+-- window really means "no keyboard activity for this long" - it expires
+-- quickly once you're done, but never lapses mid-message. Uses mq.gettime()
+-- rather than os.time() as the clock.
+BMHotkeys.ChatGraceSeconds = 1
 local chatAssumedOpenAt = nil
 local wasEnterDown = false
 local wasEscapeDown = false
 
 local function nowSeconds()
     return mq.gettime() / 1000
+end
+
+---True if any assignable (plain typing) key is currently held down. Uses
+---IsKeyDown rather than a press-edge check, since a held/auto-repeating key
+---only generates one press edge but must keep refreshing the window for as
+---long as it's held. Only scanned while the window is already open, so this
+---adds no per-frame cost the rest of the time.
+---@return boolean
+local function anyTypingKeyDown()
+    for key = ImGuiKey.NamedKey_BEGIN, ImGuiKey.NamedKey_END - 1 do
+        if isAssignableKey(key) and ImGui.IsKeyDown(key) then
+            return true
+        end
+    end
+    return false
+end
+
+---True if the grace window is genuinely still open (not just set, but not
+---yet past ChatGraceSeconds). Self-heals - nils chatAssumedOpenAt once
+---expired - so a keypress arriving after expiry can't resurrect a dead
+---window; only activity seen while still open extends it further.
+---@return boolean
+local function isChatAssumedOpen()
+    if not chatAssumedOpenAt then return false end
+    if nowSeconds() - chatAssumedOpenAt > BMHotkeys.ChatGraceSeconds then
+        chatAssumedOpenAt = nil -- grace period expired with no Enter/Escape/typing seen - self heal
+        return false
+    end
+    return true
 end
 
 local function updateChatTrackingFromKeys()
@@ -283,6 +314,8 @@ local function updateChatTrackingFromKeys()
         chatAssumedOpenAt = nowSeconds() -- (re)start/extend the window; every Enter counts the same, open or send
     elseif escapeEdge then
         chatAssumedOpenAt = nil -- explicit early-out when this DOES make it through
+    elseif isChatAssumedOpen() and anyTypingKeyDown() then
+        chatAssumedOpenAt = nowSeconds() -- still actively typing (or holding a key) - keep the window alive
     end
 end
 
@@ -294,15 +327,6 @@ function BMHotkeys.UpdateChatTracking()
     if not ok then
         btnUtils.Debug("BMHotkeys.UpdateChatTracking failed: %s", tostring(err))
     end
-end
-
-local function isChatAssumedOpen()
-    if not chatAssumedOpenAt then return false end
-    if nowSeconds() - chatAssumedOpenAt > BMHotkeys.ChatGraceSeconds then
-        chatAssumedOpenAt = nil -- grace period expired with no Enter/Escape seen - self heal
-        return false
-    end
-    return true
 end
 
 -- Off switch for the best-effort window lookup, independent of the
