@@ -374,7 +374,7 @@ function BMButtonHandlers.Render(Button, size, renderLabel, fontScale, advToolti
         if Button.highestRenderTime == nil or renderTimeMS > Button.highestRenderTime then Button.highestRenderTime = renderTimeMS end
         ImGui.SetWindowFontScale(0.8)
         BMButtonHandlers.RenderButtonDebugText(cursorScreenPos, tostring(Button.highestRenderTime))
-        BMButtonHandlers.RenderButtonDebugText(ImVec2(cursorScreenPos.x, cursorScreenPos.y + 10), string.format("%d,%d", Button.labelMidX, Button.labelMidY))
+        BMButtonHandlers.RenderButtonDebugText(ImVec2(cursorScreenPos.x, cursorScreenPos.y + 10), string.format("%d,%d", Button.labelMidX or 0, Button.labelMidY or 0))
         ImGui.SetWindowFontScale(1)
     end
 
