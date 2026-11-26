@@ -244,17 +244,21 @@ local function debugDumpChatWindowChain()
     if now - lastChatWindowChainDumpAt < 2 then return end
     lastChatWindowChainDumpAt = now
 
+    -- Next does NOT walk to a second same-named top-level window - confirmed
+    -- empirically in-game (it returned something non-nil but without a
+    -- .Child member, erroring out immediately). So this only ever reports
+    -- whichever single instance Window["ChatWindow"] resolves to - still
+    -- useful to see what that resolves to and whether it's Highlighted.
     local ok, err = pcall(function()
         local w = mq.TLO.Window("ChatWindow")
-        local i = 0
-        while w and w() ~= nil and i < 8 do
-            local input = w.Child("CW_ChatInput")
-            local inputHighlighted = input() ~= nil and tostring(input.Highlighted())
-            btnUtils.Debug("ChatWindow chain[%d]: Name=%s Text=%s Highlighted=%s InputHighlighted=%s",
-                i, tostring(w.Name()), tostring(w.Text()), tostring(w.Highlighted()), tostring(inputHighlighted))
-            w = w.Next
-            i = i + 1
+        if w() == nil then
+            btnUtils.Debug("ChatWindow: no match")
+            return
         end
+        local input = w.Child("CW_ChatInput")
+        local inputHighlighted = input() ~= nil and tostring(input.Highlighted())
+        btnUtils.Debug("ChatWindow (first match): Name=%s Text=%s Highlighted=%s InputHighlighted=%s",
+            tostring(w.Name()), tostring(w.Text()), tostring(w.Highlighted()), tostring(inputHighlighted))
     end)
     if not ok then
         btnUtils.Debug("debugDumpChatWindowChain failed: %s", tostring(err))
