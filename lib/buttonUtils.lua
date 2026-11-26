@@ -61,6 +61,12 @@ function ButtonUtils.LoadState()
     local state, state_err = loadfile(ButtonUtils.CharStateConfig)
     if not state_err and state then
         ButtonUtils.State = state()
+        -- Dev-menu toggles (see bmHotbarClass.lua) piggyback on this state
+        -- file since it's already loaded at startup (see BMSettings.new) -
+        -- restore the live flag from the saved value, if any was saved.
+        if ButtonUtils.State.DebugEnabled ~= nil then
+            ButtonUtils.enableDebug = ButtonUtils.State.DebugEnabled
+        end
     end
 end
 

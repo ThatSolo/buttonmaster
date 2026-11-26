@@ -740,9 +740,12 @@ function BMHotbarClass:RenderTabContextMenu()
         if ImGui.BeginMenu("Dev") then
             if ImGui.MenuItem((btnUtils.enableDebug and "Disable" or "Enable") .. " Debug") then
                 btnUtils.enableDebug = not btnUtils.enableDebug
+                btnUtils.State.DebugEnabled = btnUtils.enableDebug
+                btnUtils.SaveState()
             end
             if ImGui.MenuItem((BMHotkeys.EnableWindowLookup and "Disable" or "Enable") .. " Chat-Window Lookup (Hotkeys)") then
                 BMHotkeys.EnableWindowLookup = not BMHotkeys.EnableWindowLookup
+                BMHotkeys.SaveDevToggles()
             end
             btnUtils.Tooltip(
                 "Turn this OFF to test whether the chat-window name lookup is false-positiving\nand blocking hotkeys outside of chat. The Enter/Escape-based suppression\nstill works fine without it - this is only the secondary, unverified check.")

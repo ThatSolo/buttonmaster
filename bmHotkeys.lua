@@ -396,10 +396,36 @@ function BMHotkeys.UpdateChatTracking()
 end
 
 -- Off switch for the best-effort window lookup, independent of the
--- self-tracked Enter/Escape timer. Defaults off: on some UI setups
--- "ChatWindow" reports Highlighted=true even while not typing, a false
--- positive that blocks hotkeys permanently. Dev menu toggle to re-enable.
-BMHotkeys.EnableWindowLookup = false
+-- self-tracked Enter/Escape timer. Defaults on: confirmed in-game (default
+-- UI) that checking ChatWindow > CW_ChatInput specifically - not the bare
+-- top-level ChatWindow, which falsely reports Highlighted=true just from
+-- being the last-active chat pane - catches long typing pauses without
+-- false-positiving outside chat. Dev menu toggle to disable if a different
+-- UI setup false-positives.
+BMHotkeys.EnableWindowLookup = true
+
+-- Persists the toggle above across /lua stop+run reloads. Kept local to
+-- this file rather than routed through BMSettings/ButtonUtils.State: this
+-- default is set at module-load time, before BMSettings.new() has had a
+-- chance to run its own LoadState(), so restoring it here - right after the
+-- default - doesn't depend on require order elsewhere.
+local devToggleConfigPath = mq.configDir .. "/ButtonMaster/" ..
+    string.format("%s_%s", mq.TLO.EverQuest.Server(), mq.TLO.Me.DisplayName()) .. "_hotkeydevtoggles.lua"
+
+---Call after flipping BMHotkeys.EnableWindowLookup from the Dev menu.
+function BMHotkeys.SaveDevToggles()
+    mq.pickle(devToggleConfigPath, { EnableWindowLookup = BMHotkeys.EnableWindowLookup })
+end
+
+do
+    local loaded, load_err = loadfile(devToggleConfigPath)
+    if not load_err and loaded then
+        local ok, saved = pcall(loaded)
+        if ok and saved and saved.EnableWindowLookup ~= nil then
+            BMHotkeys.EnableWindowLookup = saved.EnableWindowLookup
+        end
+    end
+end
 
 ---True if EQ's chat input currently has focus (the player is typing a
 ---message/command) by either signal: the best-effort window lookup above,
