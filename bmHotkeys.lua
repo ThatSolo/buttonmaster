@@ -224,47 +224,6 @@ function BMHotkeys.FindConflict(Hotkey, charHotkeys, excludeKey)
     return nil
 end
 
--- TEMPORARY DIAGNOSTIC - not part of the real suppression logic, remove once
--- the question below is answered. The default UI can have more than one
--- top-level window literally named "ChatWindow" (confirmed via Window
--- Inspector: a player with a second, separate chat window gets two distinct
--- "ChatWindow" entries in the window tree). Window[Name] is only documented
--- as returning "the first window matching Name" - which one that is for a
--- duplicate name isn't documented - so isKnownChatWindowFocused below may
--- only ever be checking one specific instance, never the other one, no
--- matter which chat window you're actually typing in. This walks the
--- Next-sibling chain from that first match to see whether it reaches the
--- second instance at all, and if so, which one is Highlighted while you're
--- paused mid-message in each. Throttled to once every 2s and gated on Debug
--- mode so it doesn't spam the console.
-local lastChatWindowChainDumpAt = 0
-local function debugDumpChatWindowChain()
-    if not btnUtils.enableDebug then return end
-    local now = mq.gettime() / 1000
-    if now - lastChatWindowChainDumpAt < 2 then return end
-    lastChatWindowChainDumpAt = now
-
-    -- Next does NOT walk to a second same-named top-level window - confirmed
-    -- empirically in-game (it returned something non-nil but without a
-    -- .Child member, erroring out immediately). So this only ever reports
-    -- whichever single instance Window["ChatWindow"] resolves to - still
-    -- useful to see what that resolves to and whether it's Highlighted.
-    local ok, err = pcall(function()
-        local w = mq.TLO.Window("ChatWindow")
-        if w() == nil then
-            btnUtils.Debug("ChatWindow: no match")
-            return
-        end
-        local input = w.Child("CW_ChatInput")
-        local inputHighlighted = input() ~= nil and tostring(input.Highlighted())
-        btnUtils.Debug("ChatWindow (first match): Name=%s Text=%s Highlighted=%s InputHighlighted=%s",
-            tostring(w.Name()), tostring(w.Text()), tostring(w.Highlighted()), tostring(inputHighlighted))
-    end)
-    if not ok then
-        btnUtils.Debug("debugDumpChatWindowChain failed: %s", tostring(err))
-    end
-end
-
 ---True if EQ's own chat input line currently has keyboard focus, checked by
 ---asking the game's UI directly. Best-effort: custom chat window setups can
 ---use different window names than the default UI and just silently never
@@ -272,7 +231,6 @@ end
 ---doesn't depend on this.
 ---@return string? matchedCandidate # e.g. "ChatWindow > CW_ChatInput", or nil if none matched
 local function isKnownChatWindowFocused()
-    debugDumpChatWindowChain()
     -- Default UI confirmed via MacroQuest's Window Inspector: ChatWindow >
     -- CW_ChatInput is the actual input Editbox. Checking that specific
     -- control (not the bare top-level ChatWindow) matters - the window
