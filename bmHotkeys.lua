@@ -231,12 +231,17 @@ end
 ---doesn't depend on this.
 ---@return string? matchedCandidate # e.g. "ChatWindow > CW_ChatInput", or nil if none matched
 local function isKnownChatWindowFocused()
-    -- (topLevelWindow, childWindow-or-nil) pairs worth trying. Add more here
-    -- if your UI uses a different window name (check via "/windows open" or
-    -- MacroQuest's Window Inspector in /mqconsole).
+    -- Default UI confirmed via MacroQuest's Window Inspector: ChatWindow >
+    -- CW_ChatInput is the actual input Editbox. Checking that specific
+    -- control (not the bare top-level ChatWindow) matters - the window
+    -- itself can report Highlighted=true just from being the last-active
+    -- chat pane, with nothing to do with the input line having keyboard
+    -- focus, which was the source of the false positives this was
+    -- previously disabled for. (topLevelWindow, childWindow-or-nil) pairs -
+    -- add more here if your UI uses different window names (check via
+    -- "/windows open" or the Window Inspector in /mqconsole).
     local candidates = {
         { "ChatWindow", "CW_ChatInput" },
-        { "ChatWindow", nil },
         { "ChatInputWnd", nil },
     }
 
