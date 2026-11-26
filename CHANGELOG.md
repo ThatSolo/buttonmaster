@@ -16,6 +16,9 @@ Buttons can now be triggered by a keyboard shortcut, assigned live from the butt
 ## Fixes
 
 - **Drag-and-drop misfiring on character-switch** - clicking to switch focus between characters could be misread by Dear ImGui as a long-press, making it look like you'd grabbed a button to move it. Fixed two ways: the existing per-hotbar "Locked" toggle now also blocks drag-and-drop (not just window move/resize), and unlocked hotbars require a brief period of stable window focus before a click-and-hold is trusted as a real drag.
+- **Hotkeys permanently locking out after switching back to a character** - the same focus-switch quirk above could also leave a keyboard key stuck "down" in Dear ImGui with no release ever registering, which the chat-suppression tracking misread as continuous typing and used to refresh its grace window forever. Key state is now distrusted for a brief period right after a window regains focus, the same way drag-and-drop already was.
+- **Crash when checking remaining chat-suppression time** - the debug-log message showing seconds left could crash on a fractional value (mq.gettime() is in milliseconds, so this was common, not an edge case). Rounded up to a whole second before formatting.
+- **Hotkeys locking out after sending a chat message** - pressing your own bound hotkeys right after finishing typing (e.g. resuming a combat rotation after sending a tell) could keep re-arming the very suppression window blocking them, since mashing a key looks identical to typing it whether or not it's bound. A character's own bound hotkey keys no longer count as "still typing" for that purpose. The default grace period was also raised slightly (1s to 2s) since a normal pause between words was enough to lapse it mid-message.
 
 ## Housekeeping
 

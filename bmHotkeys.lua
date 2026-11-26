@@ -260,9 +260,12 @@ end
 -- toggling on/off, since a "closing" Enter isn't guaranteed to reach this
 -- overlay; ordinary typing (or a held key) keeps extending it too, so the
 -- window really means "no keyboard activity for this long" - it expires
--- quickly once you're done, but never lapses mid-message. Uses mq.gettime()
--- rather than os.time() as the clock.
-BMHotkeys.ChatGraceSeconds = 1
+-- quickly once you're done, but never lapses mid-message. 1s cuts it close
+-- for a normal typing cadence (a brief pause between words is enough to
+-- lapse it mid-message); 2s gives more headroom while still resuming fast
+-- once you're actually done. Uses mq.gettime() rather than os.time() as the
+-- clock.
+BMHotkeys.ChatGraceSeconds = 2
 local chatAssumedOpenAt = nil
 local wasEnterDown = false
 local wasEscapeDown = false
@@ -271,15 +274,64 @@ local function nowSeconds()
     return mq.gettime() / 1000
 end
 
----True if any assignable (plain typing) key is currently held down. Uses
+-- Switching focus between character windows (clicking a different client,
+-- same as the drag-and-drop focus bug - see BMButtonHandlers.IsInteractionSafe)
+-- can leave Dear ImGui thinking some key is still held down from before the
+-- switch, with no release ever registering. Key state is distrusted for a
+-- short settle period right after regaining foreground so a stuck key can't
+-- be mistaken for real activity.
+local FOCUS_SETTLE_FRAMES = 20
+local wasForeground = false
+local foregroundStableFrames = 0
+
+local function isKeyStateTrustworthy()
+    local ok, isForeground = pcall(function() return mq.TLO.EverQuest.Foreground() end)
+    if not ok then isForeground = true end -- fail open
+
+    if isForeground and wasForeground then
+        foregroundStableFrames = foregroundStableFrames + 1
+    else
+        foregroundStableFrames = 0
+    end
+    wasForeground = isForeground
+
+    return foregroundStableFrames >= FOCUS_SETTLE_FRAMES
+end
+
+---Keys currently bound as a hotkey on this character, as a {[Key]=true} set.
+---Best-effort: BMSettings is a global set up by init.lua, not required here
+---(requiring it back would be circular - BMSettings requires
+---BMButtonHandlers, which requires this module), so it's read defensively.
+---@return table<integer, boolean>
+local function currentlyBoundKeys()
+    local excluded = {}
+    local ok, charHotkeys = pcall(function() return BMSettings and BMSettings:GetCharHotkeys() end)
+    if ok and charHotkeys then
+        for _, hotkey in pairs(charHotkeys) do
+            if hotkey and hotkey.Key then excluded[hotkey.Key] = true end
+        end
+    end
+    return excluded
+end
+
+---True if any assignable (plain typing) key - other than Enter/Escape or one
+---of this character's own bound hotkeys - is currently held down. Uses
 ---IsKeyDown rather than a press-edge check, since a held/auto-repeating key
 ---only generates one press edge but must keep refreshing the window for as
----long as it's held. Only scanned while the window is already open, so this
----adds no per-frame cost the rest of the time.
+---long as it's held. Enter/Escape are excluded since they're already tracked
+---as their own edges above (see isKeyStateTrustworthy for why counting them
+---here too is dangerous). Bound hotkeys are excluded because otherwise,
+---after the window is armed, simply mashing your own hotkeys in gameplay
+---(not typing at all) would keep re-arming the very suppression blocking
+---them, locking them out indefinitely instead of letting the window expire.
+---Only scanned while the window is already open, so this adds no per-frame
+---cost the rest of the time.
 ---@return boolean
 local function anyTypingKeyDown()
+    local boundKeys = currentlyBoundKeys()
     for key = ImGuiKey.NamedKey_BEGIN, ImGuiKey.NamedKey_END - 1 do
-        if isAssignableKey(key) and ImGui.IsKeyDown(key) then
+        if key ~= ImGuiKey.Enter and key ~= ImGuiKey.KeypadEnter and key ~= ImGuiKey.Escape
+            and not boundKeys[key] and isAssignableKey(key) and ImGui.IsKeyDown(key) then
             return true
         end
     end
@@ -303,6 +355,15 @@ end
 local function updateChatTrackingFromKeys()
     local enterDown = ImGui.IsKeyDown(ImGuiKey.Enter) or ImGui.IsKeyDown(ImGuiKey.KeypadEnter)
     local escapeDown = ImGui.IsKeyDown(ImGuiKey.Escape)
+
+    if not isKeyStateTrustworthy() then
+        -- Absorb the current (possibly stale) key state without acting on it,
+        -- so a key that's actually stuck down doesn't register as a fresh
+        -- edge once the settle window ends.
+        wasEnterDown = enterDown
+        wasEscapeDown = escapeDown
+        return
+    end
 
     local enterEdge = enterDown and not wasEnterDown
     local escapeEdge = escapeDown and not wasEscapeDown
@@ -346,7 +407,9 @@ BMHotkeys.EnableWindowLookup = false
 function BMHotkeys.IsChatInputActive()
     if isChatAssumedOpen() then
         local secondsLeft = BMHotkeys.ChatGraceSeconds - (nowSeconds() - chatAssumedOpenAt)
-        return true, string.format("Enter-tracked grace window, %ds left", math.max(secondsLeft, 0))
+        -- rounded up to a whole second for display - %d errors on a non-integer
+        -- float, which secondsLeft almost always is (mq.gettime() is milliseconds)
+        return true, string.format("Enter-tracked grace window, %ds left", math.max(math.ceil(secondsLeft), 0))
     end
 
     if BMHotkeys.EnableWindowLookup then
